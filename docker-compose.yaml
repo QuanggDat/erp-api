@@ -1,4 +1,4 @@
-# Docker Compose cho môi trường development của NestJS API
+# Docker Compose cho môi trường development của erp-api
 services:
   dev-database:
     image: postgres:15.0

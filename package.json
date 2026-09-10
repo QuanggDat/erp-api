@@ -1,7 +1,7 @@
 {
-  "name": "nestjs-api-app",
-  "version": "0.0.1",
-  "description": "",
+  "name": "erp-api",
+  "version": "0.1.0",
+  "description": "REST API cho hệ thống ERP: sản phẩm, mua hàng, bán hàng, kho và nhân sự",
   "author": "",
   "private": true,
   "license": "UNLICENSED",

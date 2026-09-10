@@ -1,17 +1,17 @@
-# NestJS RestAPI
+# erp-api
 
-Back-end REST API viết bằng NestJS + Prisma + PostgreSQL, phục vụ cho front-end
-Next.js (`NextJS-Blogs-Management`).
+REST API cho hệ thống ERP, viết bằng NestJS, Prisma và PostgreSQL.
+Giao diện web nằm ở repo [`erp-web`](https://github.com/QuanggDat/erp-web).
 
-API gồm 2 phần: **xác thực người dùng** (bảng `users`) và **quản lý blog**
-(bảng `notes`).
+Năm phân hệ: **sản phẩm**, **mua hàng**, **bán hàng**, **kho** và **nhân sự**,
+kèm xác thực người dùng và phân quyền theo vai trò.
 
 ## Kiến trúc
 
-| Thành phần | Đường dẫn | Port |
+| Thành phần | Repo | Port |
 |---|---|---|
-| Back-end (NestJS)   | `NestJS-RestAPI`          | **3000** |
-| Front-end (Next.js) | `NextJS-Blogs-Management` | **3001** |
+| Back-end (NestJS)   | `erp-api` | **3000** |
+| Front-end (Next.js) | `erp-web` | **3001** |
 | Database dev (Postgres) | docker `dev-database`  | 5434 |
 | Database test (Postgres) | docker `test-database` | 5435 |
 
@@ -23,7 +23,7 @@ Back-end đã bật CORS cho `http://localhost:3001` trong [`src/main.ts`](src/m
 **1. Bật database** (Docker phải đang chạy):
 ```bash
 npm run db:dev:create      # tạo & bật container dev-database
-npm run prisma:dev:deploy  # chạy migration, tạo bảng users + notes
+npm run prisma:dev:deploy  # chạy migration, tạo toàn bộ bảng
 ```
 
 **2. Cài thư viện và bật server**:
