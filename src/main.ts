@@ -11,7 +11,8 @@ async function bootstrap() {
     credentials: true,
   });
   //kiểm tra dữ liệu DTO gửi lên; whitelist loại bỏ field không khai báo trong DTO
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+  //transform biến payload/query thành instance của DTO, nhờ đó @Type() và giá trị mặc định mới có hiệu lực
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   await app.listen(process.env.PORT ?? 3000);
 }
 void bootstrap();

@@ -4,19 +4,40 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { InsertNoteDTO, UpdateNoteDTO } from './dto';
+import { GetNotesQueryDTO, InsertNoteDTO, UpdateNoteDTO } from './dto';
 
 @Injectable()
 export class NoteService {
   constructor(private prismaService: PrismaService) {}
 
-  //lấy TẤT CẢ note của riêng user đang đăng nhập
-  getNotes(userId: number) {
-    return this.prismaService.note.findMany({
-      where: {
-        userId: userId,
+  //lấy note của riêng user đang đăng nhập, có phân trang
+  async getNotes(userId: number, query: GetNotesQueryDTO) {
+    const { page, limit } = query;
+    const skip = (page - 1) * limit;
+    const where = { userId: userId };
+
+    //chạy song song hai truy vấn: lấy 1 trang dữ liệu và đếm tổng số bản ghi
+    const [items, total] = await Promise.all([
+      this.prismaService.note.findMany({
+        where,
+        skip: skip,
+        take: limit,
+        orderBy: {
+          createdAt: 'desc', //note mới nhất lên đầu để thứ tự trang luôn ổn định
+        },
+      }),
+      this.prismaService.note.count({ where }),
+    ]);
+
+    return {
+      items,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
       },
-    });
+    };
   }
 
   //lấy một note theo id, nhưng vẫn phải đúng chủ sở hữu

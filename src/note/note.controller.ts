@@ -9,11 +9,12 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { GetUser } from '../auth/decorator';
 import { MyJwtGuard } from '../auth/guard';
-import { InsertNoteDTO, UpdateNoteDTO } from './dto';
+import { GetNotesQueryDTO, InsertNoteDTO, UpdateNoteDTO } from './dto';
 import { NoteService } from './note.service';
 
 //đặt guard ở cấp controller: MỌI route bên dưới đều yêu cầu accessToken
@@ -22,10 +23,10 @@ import { NoteService } from './note.service';
 export class NoteController {
   constructor(private noteService: NoteService) {}
 
-  //GET: .../notes
+  //GET: .../notes?page=1&limit=10
   @Get()
-  getNotes(@GetUser('id') userId: number) {
-    return this.noteService.getNotes(userId);
+  getNotes(@GetUser('id') userId: number, @Query() query: GetNotesQueryDTO) {
+    return this.noteService.getNotes(userId, query);
   }
 
   //GET: .../notes/123
