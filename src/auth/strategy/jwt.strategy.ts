@@ -29,6 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         email: true,
         firstName: true,
         lastName: true,
+        role: true, //RolesGuard cần cột này để kiểm tra quyền
         createdAt: true,
       },
     });
