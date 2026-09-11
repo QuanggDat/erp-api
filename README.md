@@ -58,9 +58,9 @@ npm run test:e2e           # chạy e2e test (tự dựng lại test-database)
 - `/auth/login` trả về `{ accessToken }`. Sai email/mật khẩu trả **403**.
 - `password` phải có **tối thiểu 6 ký tự** (`@MinLength(6)`), sai thì trả **400**.
 
-### Người dùng & Blog — bắt buộc gửi token
+### Người dùng — bắt buộc gửi token
 
-Các route bên dưới đều có `@UseGuards(MyJwtGuard)`, phải gửi kèm header:
+Mọi route từ đây trở xuống đều có `@UseGuards(MyJwtGuard)`, phải gửi kèm header:
 
 ```
 Authorization: Bearer <accessToken>
@@ -68,15 +68,9 @@ Authorization: Bearer <accessToken>
 
 | Chức năng | Method | Endpoint | Ghi chú |
 |---|---|---|---|
-| Thông tin user đang đăng nhập | GET | `/users/me` | |
-| Danh sách blog | GET | `/notes` | chỉ trả blog của chính user đó |
-| Chi tiết blog | GET | `/notes/:id` | |
-| Tạo blog | POST | `/notes` | `userId` tự gắn từ token |
-| Sửa blog | PATCH | `/notes/:id` | dùng **PATCH**, không phải PUT |
-| Xoá blog | DELETE | `/notes/:id` | trả **204 No Content** |
+| Thông tin user đang đăng nhập | GET | `/users/me` | trả về cả `role` |
 
-Thiếu hoặc sai token → **401 Unauthorized**.
-Sửa/xoá blog của người khác → **403 Access to resource denied**.
+Thiếu hoặc sai token → **401 Unauthorized**. Sai vai trò → **403**.
 
 ### ERP — bắt buộc gửi token
 
@@ -171,36 +165,83 @@ nhờ các decorator trong `src/common/transform/query.transform.ts`. Trình duy
 luôn gửi chuỗi rỗng khi ô lọc chưa được chọn, nếu không xử lý thì `categoryId=`
 sẽ thành `NaN` và lọc sạch kết quả.
 
+### Blog — phần cũ, không thuộc ERP
+
+Module `note` có từ trước khi dự án chuyển thành ERP. Nó vẫn chạy và vẫn được
+giữ lại, nhưng nằm ngoài phạm vi nghiệp vụ của hệ thống.
+
+| Chức năng | Method | Endpoint | Ghi chú |
+|---|---|---|---|
+| Danh sách blog | GET | `/notes` | chỉ trả blog của chính user đó |
+| Chi tiết blog | GET | `/notes/:id` | |
+| Tạo blog | POST | `/notes` | `userId` tự gắn từ token |
+| Sửa blog | PATCH | `/notes/:id` | dùng **PATCH**, không phải PUT |
+| Xoá blog | DELETE | `/notes/:id` | trả **204 No Content** |
+
+Bảng `notes` có ba trường bắt buộc: `title`, `description`, `url`. Trường `url`
+validate bằng `@IsUrl()` nên phải đúng dạng `https://example.com`.
+
+Sửa hoặc xoá blog của người khác → **403 Access to resource denied**.
+
 
 ## Cấu trúc dữ liệu
 
-Xem chi tiết tại [`prisma/schema.prisma`](prisma/schema.prisma).
+Toàn bộ 16 bảng định nghĩa tại [`prisma/schema.prisma`](prisma/schema.prisma).
 
-**Bảng `users`**
+### Sơ đồ quan hệ
 
-| Field | Kiểu | Ghi chú |
+```
+users ──1:n──> notes                    (phần cũ, không thuộc ERP)
+users ──1:1──> employees                (liên kết tuỳ chọn)
+
+partners ──1:n──> purchase_orders ──1:n──> purchase_order_items ──n:1──> products
+partners ──1:n──> sales_orders    ──1:n──> sales_order_items    ──n:1──> products
+
+product_categories ──1:n──> products
+
+warehouses ──1:n──> stocks          <──n:1── products   (tồn hiện tại)
+warehouses ──1:n──> stock_movements <──n:1── products   (nhật ký nhập xuất)
+
+departments ──1:n──> employees <──n:1── positions
+employees   ──1:n──> attendances
+```
+
+### Các nhóm bảng
+
+| Nhóm | Bảng | Vai trò |
 |---|---|---|
-| id | Int | khoá chính, tự tăng |
-| email | String | **unique** |
-| hashedPassword | String | mã hoá bằng argon2, không bao giờ trả về client |
-| firstName, lastName | String? | có thể để trống |
-| createdAt, updatedAt | DateTime | |
+| Xác thực | `users` | tài khoản đăng nhập, có cột `role` phân quyền |
+| Danh mục | `partners`, `products`, `product_categories` | dữ liệu nền, chứng từ tham chiếu vào |
+| Kho | `warehouses`, `stocks`, `stock_movements` | `stocks` là số liệu dẫn xuất từ `stock_movements` |
+| Mua hàng | `purchase_orders`, `purchase_order_items` | đầu chứng từ và các dòng hàng |
+| Bán hàng | `sales_orders`, `sales_order_items` | cấu trúc giống hệt bên mua |
+| Nhân sự | `employees`, `departments`, `positions`, `attendances` | không có bảng lương |
+| Phần cũ | `notes` | quản lý blog, giữ lại nhưng không thuộc ERP |
 
-**Bảng `notes`**
+### Bốn quy ước áp dụng cho mọi bảng
 
-| Field | Kiểu | Ghi chú |
+**Mã chứng từ và mã danh mục là `unique`.** `products.code`, `partners.code`,
+`purchase_orders.code` và các bảng tương tự. Trùng mã trả về **409**.
+
+**Tiền và số lượng dùng `Decimal`, không dùng `Float`.** Số thực nhị phân có
+sai số làm tròn, không chấp nhận được với tiền tệ. Prisma trả `Decimal` về
+client dưới dạng **chuỗi**, front-end phải ép kiểu trước khi tính.
+
+**Danh mục có cột `isActive` thay vì xoá cứng.** Sản phẩm, đối tác, kho và
+nhân viên đã nằm trong chứng từ cũ nên không được xoá. `DELETE` trên các bảng
+này chỉ tắt cờ.
+
+**Chi tiết chứng từ chép lại đơn giá.** `purchase_order_items.unitPrice` và
+`sales_order_items.unitPrice` là giá tại thời điểm giao dịch, không trỏ sang
+`products` để lấy giá hiện tại.
+
+### Ràng buộc duy nhất đáng chú ý
+
+| Bảng | Ràng buộc | Lý do |
 |---|---|---|
-| id | Int | khoá chính, tự tăng |
-| title | String | bắt buộc |
-| description | String | bắt buộc |
-| url | String | bắt buộc, phải đúng định dạng URL (`@IsUrl`) |
-| userId | Int | khoá ngoại trỏ tới `users.id` |
-| createdAt, updatedAt | DateTime | |
-
-Quan hệ: một `user` viết được nhiều `note` (1–n).
-
-> Khi tạo/sửa blog, `url` phải dạng `https://example.com`. Nhập chuỗi thường
-> sẽ bị `ValidationPipe` trả về lỗi **400**.
+| `stocks` | `(productId, warehouseId)` | mỗi cặp sản phẩm và kho chỉ một dòng tồn |
+| `attendances` | `(employeeId, workDate)` | một nhân viên một bản chấm công mỗi ngày |
+| `employees` | `userId` | một tài khoản chỉ gắn với một hồ sơ nhân viên |
 
 ## Cấu trúc thư mục
 
@@ -248,17 +289,34 @@ prisma/
 ## Luồng xử lý một request
 
 ```
-Client → Controller → Service → PrismaService → PostgreSQL
-             ↑
-          Guard + Strategy (kiểm tra token, với route cần đăng nhập)
+Client
+  ↓
+MyJwtGuard      đọc token, tìm user trong DB, gắn vào request.user
+  ↓
+RolesGuard      so vai trò của user với @Roles(...) trên route
+  ↓
+ValidationPipe  ép kiểu và kiểm tra DTO, loại bỏ field lạ
+  ↓
+Controller      định tuyến, không chứa logic nghiệp vụ
+  ↓
+Service         xử lý nghiệp vụ, kiểm tra ràng buộc, mở transaction
+  ↓
+PrismaService → PostgreSQL
 ```
 
-- **Controller**: nhận request, không chứa logic nghiệp vụ.
-- **Service**: xử lý nghiệp vụ (mã hoá mật khẩu, kiểm tra quyền, truy vấn DB).
-- **DTO**: mô tả dữ liệu client được phép gửi lên. `ValidationPipe` với
-  `whitelist: true` sẽ **tự loại bỏ** field không khai báo trong DTO.
-- **Guard + Strategy**: đọc token từ header, giải mã, tìm user trong DB rồi gắn
-  vào `request.user`.
+Bốn điểm cần nhớ về thứ tự này:
+
+- **`RolesGuard` chạy sau `MyJwtGuard`** nên chắc chắn đã có `request.user`.
+  Route không khai báo `@Roles(...)` thì ai đăng nhập cũng vào được.
+  Vai trò `ADMIN` đi qua mọi route mà không cần liệt kê.
+- **`ValidationPipe` với `whitelist: true` tự loại bỏ field không khai báo
+  trong DTO.** Đây là lớp chặn cuối cho dữ liệu nhạy cảm: client có gửi thêm
+  trường lạ thì nó cũng không tới được service.
+- **Service là nơi duy nhất mở transaction.** Xem `confirmPurchaseOrder` và
+  `confirmSalesOrder`: đổi trạng thái chứng từ và ghi kho phải cùng thành công
+  hoặc cùng thất bại.
+- **Controller không gọi Prisma trực tiếp.** Mọi truy vấn đi qua service, nhờ
+  vậy logic nghiệp vụ nằm một chỗ và dùng lại được.
 
 ## Biến môi trường
 
@@ -276,9 +334,18 @@ chạy test **không ảnh hưởng** dữ liệu dev.
 
 1. **Token chỉ sống 10 phút** (`expiresIn: '10m'` trong
    [`auth.service.ts`](src/auth/auth.service.ts)). Hết hạn phải đăng nhập lại.
-2. **Sửa blog dùng PATCH**, không phải PUT — front-end phải gọi đúng method.
+   Đổi vai trò trong database cũng phải đăng nhập lại, vì vai trò được đọc từ
+   database mỗi lần xác thực token.
+2. **Mọi thao tác sửa dùng PATCH, không dùng PUT.** Kể cả route xác nhận chứng
+   từ như `/purchase-orders/:id/confirm`, vì đó là đổi trạng thái của tài
+   nguyên đã có chứ không phải tạo mới.
 3. **Đổi code trong `main.ts` phải khởi động lại server** thì CORS mới có hiệu lực.
-4. Mỗi user chỉ thấy và thao tác được blog của chính mình.
+   Chế độ `start:dev` tự nạp lại, nhưng `start:prod` thì không.
+4. **Xác nhận đơn bán có thể thất bại** nếu không đủ tồn kho. Khi đó server trả
+   **409** và đơn giữ nguyên trạng thái nháp, kho không bị trừ. Front-end phải
+   xử lý trường hợp này, đừng giả định xác nhận luôn thành công.
+5. **Lần đầu clone project** phải chạy `npx prisma generate` trước khi build,
+   vì thư mục `src/generated/prisma` không được commit lên git.
 
 ## Nguyên tắc thiết kế của phân hệ ERP
 
