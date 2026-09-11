@@ -185,6 +185,8 @@ export class PurchaseService {
         lines: order.items.map((item) => ({
           productId: item.productId,
           quantity: item.quantity,
+          //giá mua thực tế của đơn này, dùng để tính lại đơn giá bình quân
+          unitCost: item.unitPrice,
         })),
         refType: 'PURCHASE_ORDER',
         refId: order.id,

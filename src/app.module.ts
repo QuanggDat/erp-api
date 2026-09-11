@@ -7,6 +7,7 @@ import { NoteModule } from './note/note.module';
 import { PartnerModule } from './partner/partner.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProductModule } from './product/product.module';
+import { ReportModule } from './report/report.module';
 import { PurchaseModule } from './purchase/purchase.module';
 import { SalesModule } from './sales/sales.module';
 import { UserModule } from './user/user.module';
@@ -26,6 +27,7 @@ import { WarehouseModule } from './warehouse/warehouse.module';
     WarehouseModule,
     PurchaseModule,
     SalesModule,
+    ReportModule,
     HrModule,
   ],
 })

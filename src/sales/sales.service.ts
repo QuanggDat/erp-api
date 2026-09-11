@@ -171,7 +171,8 @@ export class SalesService {
     this.ensureDraft(order.status, 'xác nhận');
 
     return this.prismaService.$transaction(async (tx) => {
-      await this.stockService.applyMovements(tx, {
+      //applyMovements trả về đơn giá vốn bình quân đã áp dụng cho từng dòng
+      const results = await this.stockService.applyMovements(tx, {
         warehouseId: order.warehouseId,
         type: MovementType.OUT, //bán hàng là XUẤT kho
         lines: order.items.map((item) => ({
@@ -182,9 +183,26 @@ export class SalesService {
         refId: order.id,
       });
 
+      //Ghi giá vốn vào từng dòng chi tiết. Chép lại tại đây chứ không tính
+      //lúc đọc, vì đơn giá bình quân của kho còn đổi theo các lần nhập sau,
+      //còn giá vốn của đơn đã bán thì phải cố định.
+      let totalCost = new Prisma.Decimal(0);
+      for (let i = 0; i < order.items.length; i++) {
+        const item = order.items[i];
+        const result = results[i];
+        totalCost = totalCost.plus(result.costAmount);
+        await tx.salesOrderItem.update({
+          where: { id: item.id },
+          data: {
+            unitCost: result.unitCost,
+            costAmount: result.costAmount,
+          },
+        });
+      }
+
       return tx.salesOrder.update({
         where: { id: orderId },
-        data: { status: OrderStatus.CONFIRMED },
+        data: { status: OrderStatus.CONFIRMED, totalCost },
         include: { items: true },
       });
     });
@@ -205,6 +223,9 @@ export class SalesService {
           lines: order.items.map((item) => ({
             productId: item.productId,
             quantity: item.quantity,
+            //trả về kho đúng giá vốn đã xuất, nếu đưa giá khác thì đơn giá
+            //bình quân của kho sẽ lệch sau khi huỷ đơn
+            unitCost: item.unitCost,
           })),
           refType: 'SALES_ORDER_CANCEL',
           refId: order.id,

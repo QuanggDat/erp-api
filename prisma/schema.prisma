@@ -168,6 +168,11 @@ model Stock {
   id       Int     @id @default(autoincrement())
   quantity Decimal @default(0) @db.Decimal(18, 3)
 
+  //Đơn giá vốn bình quân gia quyền của số hàng đang nằm trong kho này.
+  //Tính lại mỗi lần nhập: (giá trị tồn cũ + giá trị nhập) chia tổng số lượng.
+  //Lúc xuất thì lấy đúng đơn giá này làm giá vốn, không đổi đơn giá bình quân.
+  avgCost  Decimal @default(0) @db.Decimal(18, 2)
+
   //quan hệ
   productId   Int
   product     Product   @relation(fields: [productId], references: [id])
@@ -196,6 +201,11 @@ model StockMovement {
   type     MovementType
   quantity Decimal      @db.Decimal(18, 3) //luôn là số dương, hướng nằm ở cột type
   note     String?
+
+  //Đơn giá vốn của chính lần biến động này, chép lại tại thời điểm ghi sổ.
+  //Nhập: giá mua thực tế. Xuất: đơn giá bình quân của kho ngay trước khi xuất.
+  //Nhờ cột này mà giá vốn của một đơn cũ không đổi khi giá nhập sau này đổi.
+  unitCost Decimal      @default(0) @db.Decimal(18, 2)
 
   //chứng từ gốc sinh ra dòng này, để truy ngược
   refType String? //PURCHASE_ORDER hoặc SALES_ORDER hoặc ADJUSTMENT
@@ -276,6 +286,11 @@ model SalesOrder {
   orderDate   DateTime    @default(now())
   status      OrderStatus @default(DRAFT)
   totalAmount Decimal     @default(0) @db.Decimal(18, 2)
+
+  //Tổng giá vốn hàng bán của đơn, cộng từ các dòng chi tiết lúc xác nhận.
+  //Lãi gộp = totalAmount trừ totalCost, không lưu vì suy ra được.
+  totalCost   Decimal     @default(0) @db.Decimal(18, 2)
+
   note        String?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -295,6 +310,11 @@ model SalesOrderItem {
   quantity  Decimal @db.Decimal(18, 3)
   unitPrice Decimal @db.Decimal(18, 2) //giá bán tại thời điểm bán
   amount    Decimal @db.Decimal(18, 2)
+
+  //Giá vốn được ghi lúc XÁC NHẬN đơn, khi hàng thật sự rời kho.
+  //Đơn còn ở trạng thái nháp thì hai cột này bằng 0 vì chưa biết giá vốn.
+  unitCost  Decimal @default(0) @db.Decimal(18, 2) //đơn giá vốn một đơn vị
+  costAmount Decimal @default(0) @db.Decimal(18, 2) //quantity nhân unitCost
 
   //quan hệ
   salesOrderId Int

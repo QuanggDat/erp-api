@@ -267,12 +267,25 @@ async function main() {
   await prisma.stockMovement.deleteMany();
   await prisma.stock.deleteMany();
 
-  // tồn kho tích luỹ trong bộ nhớ, ghi xuống database một lần ở cuối
-  const stockMap = new Map(); // "productId:warehouseId" -> số lượng
-  const addStock = (productId, warehouseId, delta) => {
+  // Tồn kho tích luỹ trong bộ nhớ, ghi xuống database một lần ở cuối.
+  // Mỗi ô giữ cả số lượng lẫn đơn giá vốn bình quân, tính đúng như StockService:
+  // nhập thì bình quân lại, xuất thì giữ nguyên bình quân.
+  const stockMap = new Map(); // "productId:warehouseId" -> { qty, avgCost }
+  const addStock = (productId, warehouseId, delta, unitCost) => {
     const k = productId + ':' + warehouseId;
-    stockMap.set(k, (stockMap.get(k) ?? 0) + delta);
+    const cur = stockMap.get(k) ?? { qty: 0, avgCost: 0 };
+    if (delta > 0) {
+      const cost = unitCost ?? cur.avgCost;
+      const total = cur.qty + delta;
+      cur.avgCost = total > 0 ? (cur.qty * cur.avgCost + delta * cost) / total : 0;
+    }
+    cur.qty += delta;
+    stockMap.set(k, cur);
+    return cur.avgCost;
   };
+  // đơn giá vốn hiện tại của một ô, dùng làm giá vốn lúc xuất
+  const costOf = (productId, warehouseId) =>
+    (stockMap.get(productId + ':' + warehouseId) ?? { avgCost: 0 }).avgCost;
 
   for (const po of PO_PLAN) {
     const items = po.lines.map(([code, qty]) => {
@@ -295,12 +308,13 @@ async function main() {
         await prisma.stockMovement.create({
           data: {
             type: 'IN', quantity: it.quantity,
+            unitCost: it.unitPrice, //giá mua thực tế của lần nhập này
             productId: it.productId, warehouseId: whByCode[po.wh],
             refType: 'PURCHASE_ORDER', refId: created.id,
             note: 'Nhập kho theo ' + po.code, createdAt: d(po.date),
           },
         });
-        addStock(it.productId, whByCode[po.wh], it.quantity);
+        addStock(it.productId, whByCode[po.wh], it.quantity, it.unitPrice);
       }
     }
   }
@@ -322,17 +336,31 @@ async function main() {
       },
     });
     if (so.status === 'CONFIRMED') {
+      //giá vốn lấy TRƯỚC khi trừ kho, đúng như StockService làm
+      let orderCost = 0;
       for (const it of items) {
+        const unitCost = costOf(it.productId, whByCode[so.wh]);
+        const costAmount = it.quantity * unitCost;
+        orderCost += costAmount;
         await prisma.stockMovement.create({
           data: {
-            type: 'OUT', quantity: it.quantity,
+            type: 'OUT', quantity: it.quantity, unitCost,
             productId: it.productId, warehouseId: whByCode[so.wh],
             refType: 'SALES_ORDER', refId: created.id,
             note: 'Xuất kho theo ' + so.code, createdAt: d(so.date),
           },
         });
+        //ghi giá vốn vào đúng dòng chi tiết của đơn
+        await prisma.salesOrderItem.updateMany({
+          where: { salesOrderId: created.id, productId: it.productId },
+          data: { unitCost, costAmount },
+        });
         addStock(it.productId, whByCode[so.wh], -it.quantity);
       }
+      await prisma.salesOrder.update({
+        where: { id: created.id },
+        data: { totalCost: orderCost },
+      });
     }
   }
   console.log('  don ban:', SO_PLAN.length);
@@ -342,6 +370,7 @@ async function main() {
     await prisma.stockMovement.create({
       data: {
         type: 'ADJUST', quantity: a.qty,
+        unitCost: costOf(prod.id, whByCode[a.wh]),
         productId: prod.id, warehouseId: whByCode[a.wh],
         refType: 'ADJUSTMENT', note: a.note, createdAt: d('2026-09-04'),
       },
@@ -351,9 +380,14 @@ async function main() {
   console.log('  dieu chinh kiem ke:', ADJUSTMENTS.length);
 
   const stockRows = [];
-  for (const [k, qty] of stockMap) {
+  for (const [k, v] of stockMap) {
     const [productId, warehouseId] = k.split(':').map(Number);
-    stockRows.push({ productId, warehouseId, quantity: qty });
+    stockRows.push({
+      productId,
+      warehouseId,
+      quantity: v.qty,
+      avgCost: Number(v.avgCost.toFixed(2)),
+    });
   }
   await prisma.stock.createMany({ data: stockRows });
   console.log('  dong ton kho:', stockRows.length);
