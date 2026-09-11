@@ -33,7 +33,8 @@
     "pretest:e2e": "npm run db:test:restart",
     "prisma:generate": "prisma generate",
     "prisma:deploy": "prisma migrate deploy",
-    "build:prod": "prisma generate && nest build"
+    "build:prod": "prisma generate && nest build",
+    "db:seed": "node prisma/seed.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
