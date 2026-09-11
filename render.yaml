@@ -13,6 +13,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # NODE_ENV=production khiến npm bỏ devDependencies, mà @nestjs/cli và prisma
+      # nằm ở đó nên build sẽ chết. Biến này buộc npm ci cài đủ cả dev.
+      - key: NPM_CONFIG_PRODUCTION
+        value: "false"
       - key: DATABASE_URL
         sync: false # dán connection string của Neon trong Render Dashboard
       - key: JWT_SECRET
