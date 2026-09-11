@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { StringValue } from 'ms';
 import { JwtService } from '@nestjs/jwt';
 import * as argon from 'argon2';
 import { Prisma } from '../generated/prisma/client';
@@ -79,7 +80,14 @@ export class AuthService {
       email,
     };
     const jwtString = await this.jwtService.signAsync(payload, {
-      expiresIn: '10m', //token hết hạn sau 10 phút
+      //Thời hạn token đọc từ biến JWT_EXPIRES_IN, mặc định 30 ngày.
+      //Chấp nhận dạng '30d', '12h', '60m'. Đặt dài thì đỡ phải đăng nhập lại,
+      //đổi lại token lỡ bị lộ sẽ dùng được tới tận lúc hết hạn: hệ thống không
+      //lưu token ở đâu nên không thu hồi được, kể cả khi đổi mật khẩu.
+      //ms khai báo expiresIn là literal dạng '30d' chứ không phải string
+      //chung, nên phải ép về StringValue sau khi đọc từ biến môi trường
+      expiresIn: (this.configService.get<string>('JWT_EXPIRES_IN') ??
+        '30d') as StringValue,
       secret: this.configService.get<string>('JWT_SECRET'),
     });
     return {

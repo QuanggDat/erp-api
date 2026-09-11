@@ -21,6 +21,10 @@ services:
         sync: false # dán connection string của Neon trong Render Dashboard
       - key: JWT_SECRET
         generateValue: true # Render tự sinh chuỗi random an toàn
+      # Thời hạn access token. 30d là 30 ngày, đỡ phải đăng nhập lại liên tục.
+      # Rút ngắn (ví dụ 12h) nếu cần chặt chẽ hơn về bảo mật.
+      - key: JWT_EXPIRES_IN
+        value: 30d
       # Các origin được phép gọi API, cách nhau bởi dấu phẩy.
       # Giữ localhost để vẫn chạy được trên máy cá nhân.
       - key: CORS_ORIGINS

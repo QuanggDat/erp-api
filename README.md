@@ -334,6 +334,7 @@ File [`.env`](.env) (môi trường dev):
 ```
 DATABASE_URL="postgresql://postgres:Abc123456789@localhost:5434/testdb?schema=public"
 JWT_SECRET="..."
+JWT_EXPIRES_IN="30d"
 CORS_ORIGINS="http://localhost:3001"
 ```
 
@@ -430,8 +431,10 @@ Push lên nhánh đã cấu hình trong [`render.yaml`](render.yaml) là Render 
 
 ## Lưu ý quan trọng
 
-1. **Token chỉ sống 10 phút** (`expiresIn: '10m'` trong
-   [`auth.service.ts`](src/auth/auth.service.ts)). Hết hạn phải đăng nhập lại.
+1. **Token sống 30 ngày**, đổi được qua biến `JWT_EXPIRES_IN` (`30d`, `12h`,
+   `60m`...) mà không phải sửa code. Hết hạn phải đăng nhập lại. Đặt càng dài
+   thì token lỡ bị lộ càng nguy hiểm, vì hệ thống không lưu token nên không
+   thu hồi được, kể cả khi đổi mật khẩu.
    Đổi vai trò trong database cũng phải đăng nhập lại, vì vai trò được đọc từ
    database mỗi lần xác thực token.
 2. **Mọi thao tác sửa dùng PATCH, không dùng PUT.** Kể cả route xác nhận chứng
