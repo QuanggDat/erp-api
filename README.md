@@ -46,6 +46,15 @@ npm run test:e2e           # chạy e2e test (tự dựng lại test-database)
 
 ## Danh sách API
 
+### Kiểm tra sức khoẻ — không cần token
+
+| Chức năng | Method | Endpoint |
+|---|---|---|
+| Health check | GET | `/health` |
+
+Trả `{ status: "ok", timestamp }` sau khi chạy được một truy vấn tới Postgres, nên
+nó xác nhận cả app lẫn database. Render dùng route này làm health check.
+
 ### Xác thực — không cần token
 
 | Chức năng | Method | Endpoint | Body |
@@ -325,10 +334,99 @@ File [`.env`](.env) (môi trường dev):
 ```
 DATABASE_URL="postgresql://postgres:Abc123456789@localhost:5434/testdb?schema=public"
 JWT_SECRET="..."
+CORS_ORIGINS="http://localhost:3001"
 ```
 
 File `.env.test` dùng cho e2e test, trỏ sang `test-database` ở port 5435 nên
 chạy test **không ảnh hưởng** dữ liệu dev.
+
+## Deploy lên Neon + Render
+
+Kiến trúc đích: database Postgres ở **Neon** (free, không hết hạn), API ở **Render**
+(free web service, tự cấp HTTPS). Repo này **chỉ có API**, chưa có frontend, nên
+chỉ deploy một service.
+
+### Bước 1 — Tạo database trên Neon
+
+1. Vào <https://neon.com> → **Sign up**, đăng nhập bằng GitHub hoặc Google (không cần thẻ).
+2. **Create project**. Đặt tên `erp`, chọn Postgres 17, region gần Việt Nam nhất
+   (`Asia Pacific (Singapore)`).
+3. Sau khi tạo xong, Neon hiện ngay ô **Connection string**. Bấm copy. Dạng của nó:
+
+   ```
+   postgresql://<user>:<password>@ep-xxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+   ```
+
+4. Kiểm tra hai thứ trong chuỗi vừa copy:
+   - Có `-pooler` trong hostname. Bản pooled chịu được nhiều kết nối hơn, phù hợp
+     với Render free vì instance bị ngủ và đánh thức liên tục.
+   - Có `?sslmode=require` ở cuối. Neon bắt buộc TLS, thiếu tham số này sẽ lỗi kết nối.
+
+   Giữ chuỗi này lại, Bước 3 cần dán vào Render.
+
+> Neon free tier ngủ sau 5 phút không có truy vấn và tự thức khi có request mới.
+> Lần gọi API đầu tiên sau khi ngủ chậm hơn khoảng một giây, đây là hành vi bình thường.
+
+### Bước 2 — Chạy migration lên Neon
+
+Migration nên chạy một lần từ máy bạn để kiểm soát được kết quả, thay vì phó mặc
+cho lần deploy đầu:
+
+```bash
+# Windows PowerShell
+$env:DATABASE_URL="<chuoi-connection-string-Neon>"
+npx prisma migrate deploy
+```
+
+Lệnh này chỉ áp dụng các migration có trong [`prisma/migrations/`](prisma/migrations/),
+không tự sinh migration mới và không xoá dữ liệu. Chạy xong phải thấy đủ 5 migration
+được áp dụng.
+
+### Bước 3 — Deploy API lên Render
+
+1. Push nhánh hiện tại lên GitHub nếu chưa push.
+2. Vào <https://render.com> → **Get Started** → đăng nhập bằng GitHub. Cấp quyền cho
+   Render đọc repo này.
+3. Chọn **New** → **Blueprint** → chọn repo `NestJS-RestAPI`. Render đọc file
+   [`render.yaml`](render.yaml) và đề xuất sẵn service `erp-api` với build command,
+   start command và health check đã cấu hình.
+4. Render hỏi giá trị cho hai biến đánh dấu `sync: false`:
+
+   | Biến | Giá trị |
+   |---|---|
+   | `DATABASE_URL` | Connection string Neon ở Bước 1 |
+   | `CORS_ORIGINS` | Origin của frontend. Chưa có frontend thì tạm điền `http://localhost:3001` |
+
+   `JWT_SECRET` để Render tự sinh, đừng dùng lại giá trị trong `.env` dev.
+5. Bấm **Apply**. Lần build đầu mất khoảng 3 đến 5 phút.
+
+Khi xong, Render cấp URL dạng `https://erp-api.onrender.com`, đã có HTTPS sẵn.
+Kiểm tra bằng:
+
+```bash
+curl https://erp-api.onrender.com/health
+# {"status":"ok","timestamp":"..."}
+```
+
+### Bước 4 — Tên miền riêng (không bắt buộc)
+
+Vào service trên Render → **Settings** → **Custom Domains** → **Add Custom Domain**.
+Render hiện bản ghi DNS cần tạo: `CNAME` trỏ về `erp-api.onrender.com` cho subdomain,
+hoặc `A` record cho domain gốc. Tạo bản ghi đó ở nhà cung cấp domain, chờ DNS lan
+truyền rồi Render tự cấp chứng chỉ Let's Encrypt và tự gia hạn. Sau khi domain hoạt
+động, thêm nó vào `CORS_ORIGINS` nếu frontend gọi API qua domain mới.
+
+### Hai đặc điểm của Render free cần biết trước
+
+1. **Instance ngủ sau 15 phút không có request.** Request đánh thức đầu tiên mất
+   khoảng 50 giây. Đây là giới hạn của gói free, không phải lỗi cấu hình.
+2. **Mỗi lần deploy là một filesystem mới.** Không ghi file cần giữ lâu vào đĩa,
+   mọi dữ liệu phải nằm ở Neon.
+
+### Khi cần deploy lại
+
+Push lên nhánh đã cấu hình trong [`render.yaml`](render.yaml) là Render tự build lại.
+Đổi biến môi trường trong Dashboard cũng kích hoạt deploy lại, không cần push.
 
 ## Lưu ý quan trọng
 
@@ -339,8 +437,9 @@ chạy test **không ảnh hưởng** dữ liệu dev.
 2. **Mọi thao tác sửa dùng PATCH, không dùng PUT.** Kể cả route xác nhận chứng
    từ như `/purchase-orders/:id/confirm`, vì đó là đổi trạng thái của tài
    nguyên đã có chứ không phải tạo mới.
-3. **Đổi code trong `main.ts` phải khởi động lại server** thì CORS mới có hiệu lực.
-   Chế độ `start:dev` tự nạp lại, nhưng `start:prod` thì không.
+3. **CORS đọc từ biến `CORS_ORIGINS`**, các origin cách nhau bởi dấu phẩy. Đổi
+   giá trị phải khởi động lại server mới có hiệu lực. Chế độ `start:dev` tự nạp
+   lại, nhưng `start:prod` thì không.
 4. **Xác nhận đơn bán có thể thất bại** nếu không đủ tồn kho. Khi đó server trả
    **409** và đơn giữ nguyên trạng thái nháp, kho không bị trừ. Front-end phải
    xử lý trường hợp này, đừng giả định xác nhận luôn thành công.

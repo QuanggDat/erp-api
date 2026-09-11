@@ -1,0 +1,21 @@
+# Render Blueprint cho erp-api
+# Tạo service từ file này: Render Dashboard -> New -> Blueprint -> chọn repo
+services:
+  - type: web
+    name: erp-api
+    runtime: node
+    plan: free
+    region: singapore # đổi sang oregon/frankfurt nếu muốn, nên cùng region với Neon
+    branch: build_erp_project
+    buildCommand: npm ci && npm run build:prod
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # dán connection string của Neon trong Render Dashboard
+      - key: JWT_SECRET
+        generateValue: true # Render tự sinh chuỗi random an toàn
+      - key: CORS_ORIGINS
+        sync: false # ví dụ: https://erp-web.onrender.com

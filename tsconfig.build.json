@@ -1,4 +1,17 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  "compilerOptions": {
+    // pin rootDir về src để output là dist/main.js, không phải dist/src/main.js
+    "rootDir": "./src"
+  },
+  // prisma.config.ts và eslint.config.mjs chỉ dùng cho tooling, không build vào dist
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "test",
+    "dist",
+    "**/*spec.ts",
+    "prisma.config.ts",
+    "eslint.config.mjs"
+  ]
 }

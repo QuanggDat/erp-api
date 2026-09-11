@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
+import { HealthModule } from './health/health.module';
 import { HrModule } from './hr/hr.module';
 import { NoteModule } from './note/note.module';
 import { PartnerModule } from './partner/partner.module';
@@ -15,6 +16,7 @@ import { WarehouseModule } from './warehouse/warehouse.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }), //nạp file .env vào process.env
     PrismaModule,
+    HealthModule,
     AuthModule,
     UserModule,
     NoteModule,

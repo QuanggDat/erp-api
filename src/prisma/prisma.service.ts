@@ -14,10 +14,6 @@ export class PrismaService extends PrismaClient implements OnModuleDestroy {
         connectionString: configService.get<string>('DATABASE_URL'),
       }),
     });
-    console.log(
-      'configService DATABASE_URL : ' +
-        configService.get<string>('DATABASE_URL'),
-    );
   }
 
   //Nest gọi hook này khi app đóng -> đóng luôn connection pool tới Postgres
