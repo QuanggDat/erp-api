@@ -21,5 +21,7 @@ services:
         sync: false # dán connection string của Neon trong Render Dashboard
       - key: JWT_SECRET
         generateValue: true # Render tự sinh chuỗi random an toàn
+      # Các origin được phép gọi API, cách nhau bởi dấu phẩy.
+      # Giữ localhost để vẫn chạy được trên máy cá nhân.
       - key: CORS_ORIGINS
-        sync: false # ví dụ: https://erp-web.onrender.com
+        value: https://erp-web-9bkk.onrender.com,http://localhost:3001
