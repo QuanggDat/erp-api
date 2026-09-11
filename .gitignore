@@ -177,3 +177,6 @@ pnpm-debug.log*
 # Claude Code / AI agent config
 .claude/
 .agents/
+# MCP local config
+.mcp.local.json
+.mcp.json

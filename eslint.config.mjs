@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['eslint.config.mjs'],
+    ignores: ['eslint.config.mjs', 'src/generated/**'], //bỏ qua code Prisma sinh tự động
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

@@ -1,5 +1,6 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';
+import { Role } from '../../generated/prisma/enums';
 
 //user đã được JwtStrategy.validate() gắn vào request
 type JwtUser = {
@@ -7,6 +8,7 @@ type JwtUser = {
   email: string;
   firstName: string | null;
   lastName: string | null;
+  role: Role;
   createdAt: Date;
 };
 

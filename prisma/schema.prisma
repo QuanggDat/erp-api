@@ -19,11 +19,13 @@ model User {
   hashedPassword String
   firstName      String?
   lastName       String?
+  role           Role     @default(VIEWER) //quyết định user được gọi những route nào
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   //quan hệ
-  notes Note[]
+  notes    Note[]
+  employee Employee? //một tài khoản có thể gắn với một hồ sơ nhân viên
 
   @@map("users") //"users" là tên bảng thật trong Postgres SQL
 }
@@ -44,3 +46,343 @@ model Note {
 
   @@map("notes")
 }
+
+// ============================================================
+// PHÂN QUYỀN
+// ============================================================
+
+//vai trò cố định, kiểm tra bằng RolesGuard trên từng route
+enum Role {
+  ADMIN //toàn quyền
+  SALES //bán hàng
+  PURCHASE //mua hàng
+  WAREHOUSE //kho
+  HR //nhân sự
+  VIEWER //chỉ xem
+
+  @@map("roles")
+}
+
+// ============================================================
+// DANH MỤC NỀN
+// ============================================================
+
+//đối tác dùng chung cho cả nhà cung cấp và khách hàng
+//một công ty vừa bán vừa mua thì chỉ cần một bản ghi, đỡ trùng dữ liệu
+enum PartnerType {
+  CUSTOMER
+  SUPPLIER
+  BOTH
+
+  @@map("partner_types")
+}
+
+model Partner {
+  id        Int         @id @default(autoincrement())
+  code      String      @unique //mã đối tác, ví dụ KH001 hoặc NCC001
+  name      String
+  type      PartnerType @default(CUSTOMER)
+  taxCode   String? //mã số thuế
+  phone     String?
+  email     String?
+  address   String?
+  isActive  Boolean     @default(true) //ngừng giao dịch thì tắt cờ này, không xoá
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  //quan hệ
+  purchaseOrders PurchaseOrder[]
+  salesOrders    SalesOrder[]
+
+  @@map("partners")
+}
+
+// ============================================================
+// SẢN PHẨM
+// ============================================================
+
+model ProductCategory {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  //quan hệ
+  products Product[]
+
+  @@map("product_categories")
+}
+
+model Product {
+  id          Int     @id @default(autoincrement())
+  code        String  @unique //mã hàng
+  name        String
+  unit        String  @default("Cái") //đơn vị tính
+  description String?
+
+  //Decimal thay vì Float: tiền tệ không được phép có sai số làm tròn
+  salePrice     Decimal @default(0) @db.Decimal(18, 2) //giá bán niêm yết
+  purchasePrice Decimal @default(0) @db.Decimal(18, 2) //giá mua tham chiếu
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  //quan hệ
+  categoryId         Int?
+  category           ProductCategory?    @relation(fields: [categoryId], references: [id])
+  purchaseOrderItems PurchaseOrderItem[]
+  salesOrderItems    SalesOrderItem[]
+  stocks             Stock[]
+  stockMovements     StockMovement[]
+
+  @@map("products")
+}
+
+// ============================================================
+// KHO
+// ============================================================
+
+model Warehouse {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  //quan hệ
+  stocks         Stock[]
+  stockMovements StockMovement[]
+  purchaseOrders PurchaseOrder[]
+  salesOrders    SalesOrder[]
+
+  @@map("warehouses")
+}
+
+//tồn kho hiện tại theo từng cặp sản phẩm và kho
+//đây là số liệu dẫn xuất, chỉ được cập nhật qua StockMovement, không sửa tay
+model Stock {
+  id       Int     @id @default(autoincrement())
+  quantity Decimal @default(0) @db.Decimal(18, 3)
+
+  //quan hệ
+  productId   Int
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouseId Int
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  updatedAt DateTime @updatedAt
+
+  //mỗi cặp sản phẩm và kho chỉ có đúng một dòng tồn
+  @@unique([productId, warehouseId])
+  @@map("stocks")
+}
+
+enum MovementType {
+  IN //nhập kho
+  OUT //xuất kho
+  ADJUST //điều chỉnh khi kiểm kê
+
+  @@map("movement_types")
+}
+
+//sổ nhật ký nhập xuất: mọi biến động tồn kho đều để lại một dòng ở đây
+//không bao giờ xoá, đây là dấu vết kiểm toán
+model StockMovement {
+  id       Int          @id @default(autoincrement())
+  type     MovementType
+  quantity Decimal      @db.Decimal(18, 3) //luôn là số dương, hướng nằm ở cột type
+  note     String?
+
+  //chứng từ gốc sinh ra dòng này, để truy ngược
+  refType String? //PURCHASE_ORDER hoặc SALES_ORDER hoặc ADJUSTMENT
+  refId   Int?
+
+  //quan hệ
+  productId   Int
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouseId Int
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, warehouseId])
+  @@map("stock_movements")
+}
+
+// ============================================================
+// TRẠNG THÁI CHỨNG TỪ (dùng chung cho đơn mua và đơn bán)
+// ============================================================
+
+enum OrderStatus {
+  DRAFT //nháp, còn sửa được
+  CONFIRMED //đã xác nhận và đã ghi kho, không sửa được nữa
+  CANCELLED //đã huỷ
+
+  @@map("order_statuses")
+}
+
+// ============================================================
+// MUA HÀNG
+// ============================================================
+
+model PurchaseOrder {
+  id          Int         @id @default(autoincrement())
+  code        String      @unique //số phiếu, ví dụ PO-2026-0001
+  orderDate   DateTime    @default(now())
+  status      OrderStatus @default(DRAFT)
+  totalAmount Decimal     @default(0) @db.Decimal(18, 2) //tính lại từ các dòng chi tiết
+  note        String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  //quan hệ
+  supplierId  Int
+  supplier    Partner             @relation(fields: [supplierId], references: [id])
+  warehouseId Int //nhập về kho nào
+  warehouse   Warehouse           @relation(fields: [warehouseId], references: [id])
+  items       PurchaseOrderItem[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id       Int     @id @default(autoincrement())
+  quantity Decimal @db.Decimal(18, 3)
+
+  //chép lại đơn giá tại thời điểm mua, không trỏ sang Product để lấy giá hiện tại
+  unitPrice Decimal @db.Decimal(18, 2)
+  amount    Decimal @db.Decimal(18, 2) //quantity nhân unitPrice
+
+  //quan hệ
+  purchaseOrderId Int
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       Int
+  product         Product       @relation(fields: [productId], references: [id])
+
+  @@map("purchase_order_items")
+}
+
+// ============================================================
+// BÁN HÀNG
+// ============================================================
+
+model SalesOrder {
+  id          Int         @id @default(autoincrement())
+  code        String      @unique //số phiếu, ví dụ SO-2026-0001
+  orderDate   DateTime    @default(now())
+  status      OrderStatus @default(DRAFT)
+  totalAmount Decimal     @default(0) @db.Decimal(18, 2)
+  note        String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  //quan hệ
+  customerId  Int
+  customer    Partner          @relation(fields: [customerId], references: [id])
+  warehouseId Int //xuất từ kho nào
+  warehouse   Warehouse        @relation(fields: [warehouseId], references: [id])
+  items       SalesOrderItem[]
+
+  @@map("sales_orders")
+}
+
+model SalesOrderItem {
+  id        Int     @id @default(autoincrement())
+  quantity  Decimal @db.Decimal(18, 3)
+  unitPrice Decimal @db.Decimal(18, 2) //giá bán tại thời điểm bán
+  amount    Decimal @db.Decimal(18, 2)
+
+  //quan hệ
+  salesOrderId Int
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  productId    Int
+  product      Product    @relation(fields: [productId], references: [id])
+
+  @@map("sales_order_items")
+}
+
+// ============================================================
+// NHÂN SỰ
+// ============================================================
+
+model Department {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  //quan hệ
+  employees Employee[]
+
+  @@map("departments")
+}
+
+model Position {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String //chức danh, ví dụ Nhân viên kinh doanh
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  //quan hệ
+  employees Employee[]
+
+  @@map("positions")
+}
+
+//nhân viên tách khỏi User vì không phải nhân viên nào cũng có tài khoản đăng nhập
+model Employee {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique //mã nhân viên
+  firstName   String
+  lastName    String
+  email       String?   @unique
+  phone       String?
+  dateOfBirth DateTime?
+  hireDate    DateTime  @default(now())
+  //KHÔNG lưu lương ở đây: tiền lương là dữ liệu nhạy cảm, hệ thống này
+  //cố ý không giữ bất kỳ con số lương nào
+  isActive    Boolean   @default(true) //nghỉ việc thì tắt cờ, không xoá
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  //quan hệ
+  departmentId Int?
+  department   Department? @relation(fields: [departmentId], references: [id])
+  positionId   Int?
+  position     Position?   @relation(fields: [positionId], references: [id])
+
+  //liên kết tuỳ chọn sang tài khoản đăng nhập
+  userId Int?  @unique
+  user   User? @relation(fields: [userId], references: [id])
+
+  attendances Attendance[]
+
+  @@map("employees")
+}
+
+model Attendance {
+  id        Int      @id @default(autoincrement())
+  workDate  DateTime @db.Date //chấm công theo ngày
+  workHours Decimal  @default(8) @db.Decimal(5, 2)
+  note      String?
+  createdAt DateTime @default(now())
+
+  //quan hệ
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id])
+
+  //một nhân viên chỉ có một bản chấm công cho mỗi ngày
+  @@unique([employeeId, workDate])
+  @@map("attendances")
+}
+
+//CỐ Ý KHÔNG CÓ bảng lương trong hệ thống này.
+//Tiền lương là dữ liệu nhạy cảm, đã được gỡ bỏ hoàn toàn khỏi cả schema,
+//API lẫn giao diện. Phân hệ nhân sự chỉ quản lý hồ sơ, phòng ban,
+//chức danh và chấm công.
