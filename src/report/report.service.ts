@@ -98,7 +98,11 @@ export class ReportService {
     const products = [...byProduct.values()]
       .map((p) => {
         const profit = p.revenue.minus(p.cost);
-        return { ...p, profit, marginPercent: marginPercent(p.revenue, profit) };
+        return {
+          ...p,
+          profit,
+          marginPercent: marginPercent(p.revenue, profit),
+        };
       })
       //mặt hàng lãi nhiều nhất lên đầu, đây là thứ người dùng muốn thấy trước
       .sort((a, b) => (b.profit.greaterThan(a.profit) ? 1 : -1));
