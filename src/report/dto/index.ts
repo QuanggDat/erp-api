@@ -1,1 +1,1 @@
-export * from './get-cogs-report-query.dto';
+export * from './get-inventory-value-query.dto';

@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client';
-import { OrderStatus } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
-import { GetCogsReportQueryDTO } from './dto';
+import { GetInventoryValueQueryDTO } from './dto';
 
 const ZERO = () => new Prisma.Decimal(0);
 
@@ -11,117 +10,106 @@ export class ReportService {
   constructor(private prismaService: PrismaService) {}
 
   //=====================================================================
-  // BÁO CÁO GIÁ VỐN THEO SẢN PHẨM
+  // BÁO CÁO GIÁ TRỊ TỒN KHO
   //
-  // Trả về mỗi sản phẩm một dòng: đã bán bao nhiêu và giá vốn bao nhiêu
-  // trong tháng được chọn.
+  // Trả lời câu hỏi: kho đang giữ bao nhiêu tiền hàng.
   //
-  // Chỉ tính đơn đã XÁC NHẬN. Đơn nháp chưa xuất kho nên chưa có giá vốn,
-  // đơn huỷ thì hàng đã quay lại kho.
+  // Mỗi dòng là một cặp sản phẩm và kho, kèm giá trị bằng tiền tính theo
+  // đơn giá bình quân gia quyền đang lưu ở bảng tồn.
+  //
+  // Đây là số liệu TẠI THỜI ĐIỂM XEM, không phải số của một kỳ đã qua.
+  // Tồn kho luôn phản ánh hiện trạng mới nhất sau mọi lần nhập xuất.
   //=====================================================================
-  async getCogsReport(query: GetCogsReportQueryDTO) {
-    const items = await this.prismaService.salesOrderItem.findMany({
+  async getInventoryValue(query: GetInventoryValueQueryDTO) {
+    const { warehouseId, search, includeZero } = query;
+
+    const rows = await this.prismaService.stock.findMany({
       where: {
-        salesOrder: this.buildOrderFilter(query),
+        ...(warehouseId !== undefined && { warehouseId }),
+        //mặc định ẩn dòng tồn bằng 0: sản phẩm đã bán hết không còn giá trị
+        //nên để trong bảng chỉ làm loãng thông tin
+        ...(!includeZero && { quantity: { not: 0 } }),
+        ...(search && {
+          product: {
+            OR: [
+              { code: { contains: search, mode: 'insensitive' } },
+              { name: { contains: search, mode: 'insensitive' } },
+            ],
+          },
+        }),
       },
       include: {
         product: { select: { id: true, code: true, name: true, unit: true } },
+        warehouse: { select: { id: true, code: true, name: true } },
       },
     });
 
-    //gom nhiều dòng của cùng một sản phẩm lại thành một
-    const theoSanPham = new Map<
-      number,
-      {
-        productId: number;
-        code: string;
-        name: string;
-        unit: string;
-        quantity: Prisma.Decimal; //tổng số lượng đã bán
-        cost: Prisma.Decimal; //tổng giá vốn
-      }
-    >();
+    let tongGiaTri = ZERO();
+    let soDongTonAm = 0;
 
-    let tongGiaVon = ZERO();
-    let tongSoLuong = ZERO();
+    const items = rows.map((r) => {
+      //giá trị tồn = số lượng nhân đơn giá bình quân
+      const value = r.quantity.times(r.avgCost).toDecimalPlaces(2);
+      tongGiaTri = tongGiaTri.plus(value);
+      if (r.quantity.lessThan(0)) soDongTonAm++;
 
-    for (const item of items) {
-      const dong = theoSanPham.get(item.productId) ?? {
-        productId: item.productId,
-        code: item.product.code,
-        name: item.product.name,
-        unit: item.product.unit,
-        quantity: ZERO(),
-        cost: ZERO(),
+      return {
+        productId: r.productId,
+        code: r.product.code,
+        name: r.product.name,
+        unit: r.product.unit,
+        warehouseId: r.warehouseId,
+        warehouseName: r.warehouse.name,
+        quantity: r.quantity,
+        avgCost: r.avgCost,
+        value,
+        updatedAt: r.updatedAt,
       };
-      dong.quantity = dong.quantity.plus(item.quantity);
-      dong.cost = dong.cost.plus(item.costAmount);
-      theoSanPham.set(item.productId, dong);
+    });
 
-      tongSoLuong = tongSoLuong.plus(item.quantity);
-      tongGiaVon = tongGiaVon.plus(item.costAmount);
-    }
-
-    const products = [...theoSanPham.values()]
-      .map((p) => ({
-        ...p,
-        //đơn giá vốn bình quân của sản phẩm trong kỳ, tiện đối chiếu
-        unitCost: p.quantity.isZero()
-          ? ZERO()
-          : p.cost.dividedBy(p.quantity).toDecimalPlaces(2),
-      }))
-      //sản phẩm tốn nhiều vốn nhất lên đầu, đây là thứ cần nhìn trước
-      .sort((a, b) => (b.cost.greaterThan(a.cost) ? 1 : -1));
+    //hàng chiếm nhiều vốn nhất lên đầu, đây là thứ cần nhìn trước
+    items.sort((a, b) => (b.value.greaterThan(a.value) ? 1 : -1));
 
     return {
       summary: {
-        productCount: products.length,
-        quantity: tongSoLuong,
-        cost: tongGiaVon,
+        //số cặp sản phẩm-kho, không phải số sản phẩm riêng biệt
+        lineCount: items.length,
+        totalValue: tongGiaTri,
+        //cảnh báo: tồn âm là sai sót cần xử lý ngay, không phải chuyện bình thường
+        negativeCount: soDongTonAm,
       },
-      products,
-      //danh sách tháng có phát sinh, để giao diện dựng ô chọn tháng
-      months: await this.getAvailableMonths(),
+      items,
+      //giá trị tồn gom theo từng kho, để biết kho nào đang giữ nhiều vốn nhất
+      byWarehouse: this.gomTheoKho(items),
     };
   }
 
-  //Điều kiện lọc đơn bán: luôn chỉ lấy đơn đã xác nhận, kèm tháng và kho
-  private buildOrderFilter(
-    query: GetCogsReportQueryDTO,
-  ): Prisma.SalesOrderWhereInput {
-    const { month, warehouseId } = query;
+  //Gom giá trị tồn theo kho. Một sản phẩm nằm ở nhiều kho thì mỗi kho
+  //tính riêng, vì đây là câu hỏi "kho nào giữ bao nhiêu tiền".
+  private gomTheoKho(
+    items: {
+      warehouseId: number;
+      warehouseName: string;
+      value: Prisma.Decimal;
+    }[],
+  ) {
+    const map = new Map<
+      number,
+      { warehouseId: number; warehouseName: string; value: Prisma.Decimal }
+    >();
 
-    let orderDate: Prisma.DateTimeFilter | undefined;
-    if (month) {
-      const [y, m] = month.split('-').map(Number);
-      orderDate = {
-        gte: new Date(Date.UTC(y, m - 1, 1)), //đầu tháng
-        lt: new Date(Date.UTC(y, m, 1)), //đầu tháng SAU
+    for (const it of items) {
+      const cur = map.get(it.warehouseId) ?? {
+        warehouseId: it.warehouseId,
+        warehouseName: it.warehouseName,
+        value: ZERO(),
       };
+      cur.value = cur.value.plus(it.value);
+      map.set(it.warehouseId, cur);
     }
 
-    return {
-      status: OrderStatus.CONFIRMED,
-      ...(warehouseId !== undefined && { warehouseId }),
-      ...(orderDate && { orderDate }),
-    };
-  }
-
-  //Các tháng có đơn đã xác nhận, dạng YYYY-MM, mới nhất trước.
-  //Chỉ lấy tháng thật sự có dữ liệu để người dùng không chọn phải tháng rỗng.
-  private async getAvailableMonths(): Promise<string[]> {
-    const rows = await this.prismaService.salesOrder.findMany({
-      where: { status: OrderStatus.CONFIRMED },
-      select: { orderDate: true },
-      orderBy: { orderDate: 'desc' },
-    });
-
-    const set = new Set<string>();
-    for (const r of rows) {
-      const y = r.orderDate.getUTCFullYear();
-      const m = String(r.orderDate.getUTCMonth() + 1).padStart(2, '0');
-      set.add(`${y}-${m}`);
-    }
-    return [...set];
+    return [...map.values()].sort((a, b) =>
+      b.value.greaterThan(a.value) ? 1 : -1,
+    );
   }
 }
