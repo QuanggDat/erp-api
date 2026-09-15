@@ -9,6 +9,7 @@ import {
 } from '../common/helper/pagination.helper';
 import { Prisma } from '../generated/prisma/client';
 import { MovementType } from '../generated/prisma/enums';
+import { tinhGiaVon } from './cogs.helper';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AdjustStockDTO,
@@ -33,38 +34,6 @@ export type MovementResult = {
   costAmount: Prisma.Decimal; //quantity nhân unitCost
 };
 
-//Tính giá vốn cho một lần biến động kho, theo bình quân gia quyền.
-//Tách riêng khỏi phần ghi database để đọc và kiểm chứng được độc lập.
-//
-//  Nhập: bình quân mới = (giá trị tồn cũ + giá trị nhập) / tổng số lượng
-//  Xuất: lấy đúng bình quân đang có, KHÔNG đổi bình quân, vì lấy hàng ra
-//        không làm thay đổi giá trị trung bình của số hàng còn lại
-export function tinhGiaVon(params: {
-  type: MovementType;
-  qty: Prisma.Decimal;
-  currentQty: Prisma.Decimal;
-  currentAvg: Prisma.Decimal;
-  unitCost?: Prisma.Decimal | number;
-}): { appliedCost: Prisma.Decimal; newAvg: Prisma.Decimal } {
-  const { type, qty, currentQty, currentAvg, unitCost } = params;
-
-  //xuất và điều chỉnh: dùng bình quân hiện tại, bình quân giữ nguyên
-  if (type !== MovementType.IN) {
-    return { appliedCost: currentAvg, newAvg: currentAvg };
-  }
-
-  //nhập: giá vốn là giá mua thực tế; không truyền thì giữ bình quân cũ
-  const appliedCost =
-    unitCost !== undefined ? new Prisma.Decimal(unitCost) : currentAvg;
-
-  const totalQty = currentQty.plus(qty);
-  if (!totalQty.greaterThan(0)) {
-    return { appliedCost, newAvg: currentAvg }; //chặn chia cho 0
-  }
-
-  const totalValue = currentQty.times(currentAvg).plus(qty.times(appliedCost));
-  return { appliedCost, newAvg: totalValue.dividedBy(totalQty) };
-}
 @Injectable()
 export class StockService {
   constructor(private prismaService: PrismaService) {}
