@@ -1,1 +1,1 @@
-export * from './get-profit-report-query.dto';
+export * from './get-cogs-report-query.dto';
