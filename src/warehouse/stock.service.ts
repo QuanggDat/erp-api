@@ -33,6 +33,38 @@ export type MovementResult = {
   costAmount: Prisma.Decimal; //quantity nhân unitCost
 };
 
+//Tính giá vốn cho một lần biến động kho, theo bình quân gia quyền.
+//Tách riêng khỏi phần ghi database để đọc và kiểm chứng được độc lập.
+//
+//  Nhập: bình quân mới = (giá trị tồn cũ + giá trị nhập) / tổng số lượng
+//  Xuất: lấy đúng bình quân đang có, KHÔNG đổi bình quân, vì lấy hàng ra
+//        không làm thay đổi giá trị trung bình của số hàng còn lại
+export function tinhGiaVon(params: {
+  type: MovementType;
+  qty: Prisma.Decimal;
+  currentQty: Prisma.Decimal;
+  currentAvg: Prisma.Decimal;
+  unitCost?: Prisma.Decimal | number;
+}): { appliedCost: Prisma.Decimal; newAvg: Prisma.Decimal } {
+  const { type, qty, currentQty, currentAvg, unitCost } = params;
+
+  //xuất và điều chỉnh: dùng bình quân hiện tại, bình quân giữ nguyên
+  if (type !== MovementType.IN) {
+    return { appliedCost: currentAvg, newAvg: currentAvg };
+  }
+
+  //nhập: giá vốn là giá mua thực tế; không truyền thì giữ bình quân cũ
+  const appliedCost =
+    unitCost !== undefined ? new Prisma.Decimal(unitCost) : currentAvg;
+
+  const totalQty = currentQty.plus(qty);
+  if (!totalQty.greaterThan(0)) {
+    return { appliedCost, newAvg: currentAvg }; //chặn chia cho 0
+  }
+
+  const totalValue = currentQty.times(currentAvg).plus(qty.times(appliedCost));
+  return { appliedCost, newAvg: totalValue.dividedBy(totalQty) };
+}
 @Injectable()
 export class StockService {
   constructor(private prismaService: PrismaService) {}
@@ -123,31 +155,14 @@ export class StockService {
     const currentQty = current?.quantity ?? new Prisma.Decimal(0);
     const currentAvg = current?.avgCost ?? new Prisma.Decimal(0);
 
-    //=================================================================
-    // GIÁ VỐN
-    // Nhập: đơn giá bình quân mới = (giá trị tồn cũ + giá trị nhập)
-    //       chia (số lượng cũ + số lượng nhập).
-    // Xuất: lấy đúng đơn giá bình quân đang có làm giá vốn, và KHÔNG
-    //       đổi đơn giá bình quân, vì xuất hàng không làm thay đổi
-    //       giá trị trung bình của số hàng còn lại.
-    //=================================================================
-    let appliedCost: Prisma.Decimal;
-    let newAvg = currentAvg;
-
-    if (type === MovementType.IN) {
-      appliedCost =
-        unitCost !== undefined ? new Prisma.Decimal(unitCost) : currentAvg;
-      const totalQty = currentQty.plus(qty);
-      if (totalQty.greaterThan(0)) {
-        const totalValue = currentQty
-          .times(currentAvg)
-          .plus(qty.times(appliedCost));
-        newAvg = totalValue.dividedBy(totalQty);
-      }
-    } else {
-      //xuất và điều chỉnh đều dùng đơn giá bình quân hiện tại
-      appliedCost = currentAvg;
-    }
+    //giá vốn tính ở hàm thuần tuý phía trên file, không chạm database
+    const { appliedCost, newAvg } = tinhGiaVon({
+      type,
+      qty,
+      currentQty,
+      currentAvg,
+      unitCost,
+    });
 
     //ghi vào sổ nhật ký trước, đây là dấu vết không bao giờ mất
     await tx.stockMovement.create({

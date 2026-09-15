@@ -119,31 +119,65 @@ export class ReportService {
       },
       products,
       orders: orderRows,
+      //danh sách tháng có phát sinh, để giao diện dựng ô chọn tháng
+      //mà không phải đoán hay gọi thêm một lượt nữa
+      months: await this.getAvailableMonths(),
     };
+  }
+
+  //=====================================================================
+  // DANH SÁCH THÁNG CÓ ĐƠN ĐÃ XÁC NHẬN
+  // Trả về dạng YYYY-MM, mới nhất lên đầu. Chỉ lấy tháng thật sự có dữ
+  // liệu để người dùng không chọn phải tháng rỗng.
+  //=====================================================================
+  private async getAvailableMonths(): Promise<string[]> {
+    const rows = await this.prismaService.salesOrder.findMany({
+      where: { status: OrderStatus.CONFIRMED },
+      select: { orderDate: true },
+      orderBy: { orderDate: 'desc' },
+    });
+
+    //Set tự loại trùng, thứ tự chèn được giữ nguyên nên vẫn mới nhất trước
+    const set = new Set<string>();
+    for (const r of rows) {
+      const y = r.orderDate.getUTCFullYear();
+      const m = String(r.orderDate.getUTCMonth() + 1).padStart(2, '0');
+      set.add(`${y}-${m}`);
+    }
+    return [...set];
   }
 
   private buildWhere(
     query: GetProfitReportQueryDTO,
   ): Prisma.SalesOrderWhereInput {
-    const { fromDate, toDate, customerId, warehouseId } = query;
+    const { month, fromDate, toDate, customerId, warehouseId } = query;
 
-    //toDate bao gồm trọn ngày đó: cộng thêm một ngày rồi so sánh nhỏ hơn,
-    //nếu dùng lte với 00:00 thì đơn lập buổi chiều sẽ bị bỏ sót
-    let toExclusive: Date | undefined;
-    if (toDate) {
-      toExclusive = new Date(toDate);
-      toExclusive.setDate(toExclusive.getDate() + 1);
+    //month có độ ưu tiên cao hơn fromDate/toDate: lọc theo tháng là cách
+    //người dùng xem báo cáo thường xuyên nhất, nên khi đã chọn tháng thì
+    //không trộn thêm khoảng ngày nữa cho khỏi khó hiểu
+    let gte: Date | undefined;
+    let lt: Date | undefined;
+
+    if (month) {
+      const [y, m] = month.split('-').map(Number);
+      gte = new Date(Date.UTC(y, m - 1, 1)); //00:00 ngày đầu tháng
+      lt = new Date(Date.UTC(y, m, 1)); //00:00 ngày đầu tháng SAU
+    } else {
+      if (fromDate) gte = new Date(fromDate);
+      //toDate bao gồm trọn ngày đó: cộng thêm một ngày rồi so sánh nhỏ hơn,
+      //nếu dùng lte với 00:00 thì đơn lập buổi chiều sẽ bị bỏ sót
+      if (toDate) {
+        lt = new Date(toDate);
+        lt.setDate(lt.getDate() + 1);
+      }
     }
 
     return {
       status: OrderStatus.CONFIRMED,
       ...(customerId !== undefined && { customerId }),
       ...(warehouseId !== undefined && { warehouseId }),
-      ...((fromDate || toDate) && {
-        orderDate: {
-          ...(fromDate && { gte: new Date(fromDate) }),
-          ...(toExclusive && { lt: toExclusive }),
-        },
+      ...((gte || lt) && {
+        orderDate: { ...(gte && { gte }), ...(lt && { lt }) },
       }),
     };
   }
