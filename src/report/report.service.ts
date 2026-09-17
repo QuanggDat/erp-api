@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client';
 import { OrderStatus } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
-import { GetCogsMonthlyQueryDTO, GetInventoryValueQueryDTO } from './dto';
+import { GetPurchaseCostMonthlyQueryDTO } from './dto';
 
 const ZERO = () => new Prisma.Decimal(0);
 
@@ -15,23 +15,37 @@ export class ReportService {
   constructor(private prismaService: PrismaService) {}
 
   //=====================================================================
-  // BÁO CÁO GIÁ VỐN THEO SẢN PHẨM VÀ THÁNG
+  // BÁO CÁO GIÁ MUA BÌNH QUÂN GIA QUYỀN THEO SẢN PHẨM VÀ THÁNG
   //
-  // Mỗi dòng là một cặp sản phẩm và tháng: tháng đó bán bao nhiêu và tốn
-  // bao nhiêu tiền vốn. Một sản phẩm bán ở ba tháng thì có ba dòng.
+  // Mỗi dòng là một cặp sản phẩm và tháng: tháng đó nhập về bao nhiêu hàng,
+  // trả bao nhiêu tiền, và đơn giá bình quân là bao nhiêu. Một sản phẩm
+  // nhập ở ba tháng thì có ba dòng.
   //
-  // Giá vốn KHÔNG tính lại ở đây. Nó đã được chốt lúc xác nhận đơn, khi
-  // hàng thật sự rời kho, và lưu vào costAmount của dòng chứng từ. Báo cáo
-  // chỉ lọc rồi cộng, nhờ vậy số liệu tháng cũ không đổi khi giá nhập sau
-  // này thay đổi.
+  // BÌNH QUÂN GIA QUYỀN CUỐI KỲ: đơn giá của tháng bằng tổng TIỀN mua chia
+  // tổng SỐ LƯỢNG mua trong tháng đó. Không lấy trung bình cộng đơn giá của
+  // các phiếu nhập, vì phiếu nhập 1000 cái phải nặng ký hơn phiếu nhập 1 cái.
   //
-  // Chỉ tính đơn đã XÁC NHẬN: đơn nháp chưa xuất kho nên chưa có giá vốn,
-  // đơn huỷ thì hàng đã quay lại kho.
+  //   Nhập 10 cái giá 100.000 và 30 cái giá 200.000
+  //   -> đúng:  (10×100k + 30×200k) / 40 = 175.000
+  //   -> sai:   (100k + 200k) / 2        = 150.000
+  //
+  // Khác với giá vốn hàng bán ở chỗ báo cáo này nhìn từ phía MUA VÀO. Nó
+  // trả lời "tháng này mua hàng đắt hay rẻ", không trả lời "bán hàng lãi
+  // bao nhiêu". Phần hàng đã bán xem ở báo cáo giá vốn, phần hàng còn trong
+  // kho xem ở báo cáo giá trị tồn kho.
+  //
+  // Chỉ tính đơn đã XÁC NHẬN: đơn nháp chưa nhập kho, đơn huỷ thì hàng
+  // không về.
   //=====================================================================
-  async getCogsMonthly(query: GetCogsMonthlyQueryDTO) {
+  async getPurchaseCostMonthly(query: GetPurchaseCostMonthlyQueryDTO) {
     const { month, productId, search, warehouseId } = query;
 
-    const items = await this.prismaService.salesOrderItem.findMany({
+    //Lấy từ dòng chứng từ chứ không từ đơn mua, vì đơn giá nằm ở mức sản
+    //phẩm: một phiếu nhập nhiều mặt hàng thì mỗi mặt hàng một giá riêng.
+    //
+    //Cố ý KHÔNG lọc theo month ở đây: cần đủ dữ liệu các tháng trước để
+    //tháng không nhập hàng còn kế thừa được đơn giá. Lọc tháng làm ở cuối.
+    const items = await this.prismaService.purchaseOrderItem.findMany({
       where: {
         //productId ưu tiên hơn search: chọn đúng một sản phẩm thì bỏ qua từ khoá
         ...(productId !== undefined
@@ -44,15 +58,18 @@ export class ReportService {
                 ],
               },
             }),
-        salesOrder: {
+        purchaseOrder: {
+          //CONFIRMED là điều kiện cố định, không phải bộ lọc tuỳ chọn
           status: OrderStatus.CONFIRMED,
           ...(warehouseId !== undefined && { warehouseId }),
-          ...(month && { orderDate: this.khoangThang(month) }),
         },
       },
       include: {
+        //lấy kèm thông tin sản phẩm để khỏi phải truy vấn thêm lần nữa
         product: { select: { id: true, code: true, name: true, unit: true } },
-        salesOrder: { select: { orderDate: true } },
+        //orderDate nằm ở đơn, không nằm ở dòng, nhưng lại là thứ quyết định
+        //dòng này thuộc tháng nào
+        purchaseOrder: { select: { orderDate: true } },
       },
     });
 
@@ -66,17 +83,15 @@ export class ReportService {
         name: string;
         unit: string;
         quantity: Prisma.Decimal;
-        cost: Prisma.Decimal;
+        amount: Prisma.Decimal;
       }
     >();
 
-    let tongGiaVon = ZERO();
-    let tongSoLuong = ZERO();
-
     for (const item of items) {
-      const thang = nhanThang(item.salesOrder.orderDate);
+      const thang = nhanThang(item.purchaseOrder.orderDate);
       const key = `${thang}|${item.productId}`;
 
+      //chưa có dòng cho cặp này thì mở dòng mới với số 0
       const dong = gom.get(key) ?? {
         month: thang,
         productId: item.productId,
@@ -84,185 +99,168 @@ export class ReportService {
         name: item.product.name,
         unit: item.product.unit,
         quantity: ZERO(),
-        cost: ZERO(),
+        amount: ZERO(),
       };
       dong.quantity = dong.quantity.plus(item.quantity);
-      dong.cost = dong.cost.plus(item.costAmount);
+      dong.amount = dong.amount.plus(item.amount);
       gom.set(key, dong);
-
-      tongSoLuong = tongSoLuong.plus(item.quantity);
-      tongGiaVon = tongGiaVon.plus(item.costAmount);
     }
 
-    const rows = [...gom.values()]
-      .map((r) => ({
-        ...r,
-        //đơn giá vốn bình quân của sản phẩm trong tháng đó
-        unitCost: r.quantity.isZero()
-          ? ZERO()
-          : r.cost.dividedBy(r.quantity).toDecimalPlaces(2),
-      }))
-      //tháng mới nhất lên đầu; trong cùng tháng thì hàng tốn nhiều vốn trước
-      .sort((a, b) =>
-        a.month === b.month
-          ? b.cost.greaterThan(a.cost)
-            ? 1
-            : -1
-          : b.month.localeCompare(a.month),
-      );
+    //Bù đơn giá cho tháng không nhập hàng, trước khi lọc tháng. Xem chú
+    //thích ở buDonGiaThangTrong để biết vì sao phải làm bước này.
+    const tatCa = this.buDonGiaThangTrong([...gom.values()]);
+
+    //Lọc tháng ở cuối cùng: các bước trên cần nhìn toàn bộ lịch sử, còn
+    //người dùng chỉ muốn xem một tháng.
+    const rows = month ? tatCa.filter((r) => r.month === month) : tatCa;
+
+    //Tổng chỉ cộng phần thực mua. Dòng kế thừa có quantity và amount bằng 0
+    //nên không làm sai tổng, nhưng vẫn cộng tường minh cho rõ ý.
+    let tongTienMua = ZERO();
+    let tongSoLuong = ZERO();
+    for (const r of rows) {
+      tongSoLuong = tongSoLuong.plus(r.quantity);
+      tongTienMua = tongTienMua.plus(r.amount);
+    }
 
     return {
       summary: {
+        //số cặp tháng-sản phẩm, không phải số sản phẩm riêng biệt
         rowCount: rows.length,
         quantity: tongSoLuong,
-        cost: tongGiaVon,
+        amount: tongTienMua,
+        //đơn giá bình quân chung của cả báo cáo, cũng chia tiền cho lượng
+        avgUnitCost: tongSoLuong.isZero()
+          ? ZERO()
+          : tongTienMua.dividedBy(tongSoLuong).toDecimalPlaces(2),
       },
       rows,
-      //tổng giá vốn từng tháng, để nhìn nhanh tháng nào tốn nhiều vốn nhất
+      //tổng tiền mua từng tháng, để nhìn nhanh tháng nào nhập nhiều nhất
       byMonth: this.gomTheoThang(rows),
       //danh sách tháng có phát sinh, dựng ô chọn tháng ở giao diện
-      months: await this.getAvailableMonths(),
+      months: [...new Set(tatCa.map((r) => r.month))].sort((a, b) =>
+        b.localeCompare(a),
+      ),
     };
-  }
-
-  //Cộng giá vốn của mọi sản phẩm trong cùng một tháng
-  private gomTheoThang(
-    rows: { month: string; cost: Prisma.Decimal }[],
-  ): { month: string; cost: Prisma.Decimal }[] {
-    const map = new Map<string, Prisma.Decimal>();
-    for (const r of rows) {
-      map.set(r.month, (map.get(r.month) ?? ZERO()).plus(r.cost));
-    }
-    return [...map.entries()]
-      .map(([month, cost]) => ({ month, cost }))
-      .sort((a, b) => b.month.localeCompare(a.month));
-  }
-
-  //Khoảng thời gian của một tháng: từ đầu tháng tới trước đầu tháng sau.
-  //Dùng lt với đầu tháng sau thay vì lte với cuối tháng, để khỏi phải biết
-  //tháng có 28, 30 hay 31 ngày và không bỏ sót đơn lập buổi chiều cuối tháng.
-  private khoangThang(month: string): Prisma.DateTimeFilter {
-    const [y, m] = month.split('-').map(Number);
-    return {
-      gte: new Date(Date.UTC(y, m - 1, 1)),
-      lt: new Date(Date.UTC(y, m, 1)),
-    };
-  }
-
-  //Các tháng có đơn đã xác nhận, dạng YYYY-MM, mới nhất trước
-  private async getAvailableMonths(): Promise<string[]> {
-    const rows = await this.prismaService.salesOrder.findMany({
-      where: { status: OrderStatus.CONFIRMED },
-      select: { orderDate: true },
-      orderBy: { orderDate: 'desc' },
-    });
-
-    const set = new Set<string>();
-    for (const r of rows) set.add(nhanThang(r.orderDate));
-    return [...set];
   }
 
   //=====================================================================
-  // BÁO CÁO GIÁ TRỊ TỒN KHO
+  // BÙ ĐƠN GIÁ CHO THÁNG KHÔNG NHẬP HÀNG
   //
-  // Trả lời câu hỏi: kho đang giữ bao nhiêu tiền hàng.
+  // Tháng 10 không nhập lô nào thì vẫn cần biết đơn giá, vì hàng bán ra
+  // tháng 10 chính là hàng đã mua từ trước. Bỏ trống dòng đó sẽ làm biểu đồ
+  // giá đứt quãng và người xem tưởng giá về 0.
   //
-  // Mỗi dòng là một cặp sản phẩm và kho, kèm giá trị bằng tiền tính theo
-  // đơn giá bình quân gia quyền đang lưu ở bảng tồn.
+  // Cách bù: lấy đơn giá của tháng gần nhất CÓ nhập, kéo sang các tháng
+  // trống phía sau, cho tới khi gặp tháng có nhập tiếp theo.
   //
-  // Đây là số liệu TẠI THỜI ĐIỂM XEM, không phải số của một kỳ đã qua.
-  // Tồn kho luôn phản ánh hiện trạng mới nhất sau mọi lần nhập xuất.
+  //   T9  nhập 10 @ 100k  -> đơn giá 100k  (thực mua)
+  //   T10 không nhập      -> đơn giá 100k  (kế thừa từ T9)
+  //   T11 không nhập      -> đơn giá 100k  (vẫn kế thừa T9)
+  //   T12 nhập 5 @ 120k   -> đơn giá 120k  (thực mua)
+  //
+  // Dòng kế thừa có quantity và amount bằng 0, kèm cờ isCarriedOver để
+  // giao diện hiển thị nhạt màu hoặc chú thích, tránh hiểu nhầm là đã mua.
+  //
+  // Chỉ bù các tháng NẰM GIỮA hai lần nhập và tới tháng nhập cuối cùng.
+  // Không bù ra tương lai vì không biết báo cáo dừng ở đâu, cũng không bù
+  // ngược về quá khứ vì trước lần nhập đầu tiên thì sản phẩm chưa tồn tại.
   //=====================================================================
-  async getInventoryValue(query: GetInventoryValueQueryDTO) {
-    const { warehouseId, search, includeZero } = query;
-
-    const rows = await this.prismaService.stock.findMany({
-      where: {
-        ...(warehouseId !== undefined && { warehouseId }),
-        //mặc định ẩn dòng tồn bằng 0: sản phẩm đã bán hết không còn giá trị
-        //nên để trong bảng chỉ làm loãng thông tin
-        ...(!includeZero && { quantity: { not: 0 } }),
-        ...(search && {
-          product: {
-            OR: [
-              { code: { contains: search, mode: 'insensitive' } },
-              { name: { contains: search, mode: 'insensitive' } },
-            ],
-          },
-        }),
-      },
-      include: {
-        product: { select: { id: true, code: true, name: true, unit: true } },
-        warehouse: { select: { id: true, code: true, name: true } },
-      },
-    });
-
-    let tongGiaTri = ZERO();
-    let soDongTonAm = 0;
-
-    const items = rows.map((r) => {
-      //giá trị tồn = số lượng nhân đơn giá bình quân
-      const value = r.quantity.times(r.avgCost).toDecimalPlaces(2);
-      tongGiaTri = tongGiaTri.plus(value);
-      if (r.quantity.lessThan(0)) soDongTonAm++;
-
-      return {
-        productId: r.productId,
-        code: r.product.code,
-        name: r.product.name,
-        unit: r.product.unit,
-        warehouseId: r.warehouseId,
-        warehouseName: r.warehouse.name,
-        quantity: r.quantity,
-        avgCost: r.avgCost,
-        value,
-        updatedAt: r.updatedAt,
-      };
-    });
-
-    //hàng chiếm nhiều vốn nhất lên đầu, đây là thứ cần nhìn trước
-    items.sort((a, b) => (b.value.greaterThan(a.value) ? 1 : -1));
-
-    return {
-      summary: {
-        //số cặp sản phẩm-kho, không phải số sản phẩm riêng biệt
-        lineCount: items.length,
-        totalValue: tongGiaTri,
-        //cảnh báo: tồn âm là sai sót cần xử lý ngay, không phải chuyện bình thường
-        negativeCount: soDongTonAm,
-      },
-      items,
-      //giá trị tồn gom theo từng kho, để biết kho nào đang giữ nhiều vốn nhất
-      byWarehouse: this.gomTheoKho(items),
-    };
-  }
-
-  //Gom giá trị tồn theo kho. Một sản phẩm nằm ở nhiều kho thì mỗi kho
-  //tính riêng, vì đây là câu hỏi "kho nào giữ bao nhiêu tiền".
-  private gomTheoKho(
-    items: {
-      warehouseId: number;
-      warehouseName: string;
-      value: Prisma.Decimal;
+  private buDonGiaThangTrong(
+    rows: {
+      month: string;
+      productId: number;
+      code: string;
+      name: string;
+      unit: string;
+      quantity: Prisma.Decimal;
+      amount: Prisma.Decimal;
     }[],
   ) {
-    const map = new Map<
-      number,
-      { warehouseId: number; warehouseName: string; value: Prisma.Decimal }
-    >();
-
-    for (const it of items) {
-      const cur = map.get(it.warehouseId) ?? {
-        warehouseId: it.warehouseId,
-        warehouseName: it.warehouseName,
-        value: ZERO(),
-      };
-      cur.value = cur.value.plus(it.value);
-      map.set(it.warehouseId, cur);
+    //tách theo sản phẩm, vì mỗi sản phẩm có lịch sử nhập riêng
+    const theoSanPham = new Map<number, typeof rows>();
+    for (const r of rows) {
+      const ds = theoSanPham.get(r.productId) ?? [];
+      ds.push(r);
+      theoSanPham.set(r.productId, ds);
     }
 
-    return [...map.values()].sort((a, b) =>
-      b.value.greaterThan(a.value) ? 1 : -1,
+    const ketQua: ((typeof rows)[number] & {
+      unitCost: Prisma.Decimal;
+      isCarriedOver: boolean;
+    })[] = [];
+
+    for (const ds of theoSanPham.values()) {
+      //duyệt từ tháng cũ tới tháng mới, để đơn giá chảy xuôi theo thời gian
+      ds.sort((a, b) => a.month.localeCompare(b.month));
+
+      let thangTruoc: string | null = null;
+      let donGiaGanNhat = ZERO();
+
+      for (const r of ds) {
+        //chèn các tháng trống nằm giữa tháng trước và tháng này
+        if (thangTruoc) {
+          for (const thangTrong of this.cacThangGiua(thangTruoc, r.month)) {
+            ketQua.push({
+              ...r,
+              month: thangTrong,
+              quantity: ZERO(),
+              amount: ZERO(),
+              unitCost: donGiaGanNhat,
+              isCarriedOver: true,
+            });
+          }
+        }
+
+        //tháng có nhập thật: đơn giá bình quân gia quyền của riêng tháng đó
+        donGiaGanNhat = r.quantity.isZero()
+          ? donGiaGanNhat
+          : r.amount.dividedBy(r.quantity).toDecimalPlaces(2);
+
+        ketQua.push({ ...r, unitCost: donGiaGanNhat, isCarriedOver: false });
+        thangTruoc = r.month;
+      }
+    }
+
+    //tháng mới nhất lên đầu; trong cùng tháng thì hàng mua nhiều tiền trước
+    return ketQua.sort((a, b) =>
+      a.month === b.month
+        ? b.amount.greaterThan(a.amount)
+          ? 1
+          : -1
+        : b.month.localeCompare(a.month),
     );
+  }
+
+  //Liệt kê các tháng nằm GIỮA hai mốc, không gồm hai đầu.
+  //Ví dụ ('2026-09', '2026-12') trả về ['2026-10', '2026-11'].
+  private cacThangGiua(tu: string, den: string): string[] {
+    const [ty, tm] = tu.split('-').map(Number);
+    const [dy, dm] = den.split('-').map(Number);
+
+    const ketQua: string[] = [];
+    //đếm tháng bằng tổng số tháng kể từ năm 0, để khỏi xử lý chuyện qua năm
+    const mocDau = ty * 12 + (tm - 1);
+    const mocCuoi = dy * 12 + (dm - 1);
+
+    for (let i = mocDau + 1; i < mocCuoi; i++) {
+      const nam = Math.floor(i / 12);
+      const thang = (i % 12) + 1;
+      ketQua.push(`${nam}-${String(thang).padStart(2, '0')}`);
+    }
+    return ketQua;
+  }
+
+  //Cộng tiền mua của mọi sản phẩm trong cùng một tháng
+  private gomTheoThang(
+    rows: { month: string; amount: Prisma.Decimal }[],
+  ): { month: string; amount: Prisma.Decimal }[] {
+    const map = new Map<string, Prisma.Decimal>();
+    for (const r of rows) {
+      map.set(r.month, (map.get(r.month) ?? ZERO()).plus(r.amount));
+    }
+    return [...map.entries()]
+      .map(([month, amount]) => ({ month, amount }))
+      .sort((a, b) => b.month.localeCompare(a.month));
   }
 }

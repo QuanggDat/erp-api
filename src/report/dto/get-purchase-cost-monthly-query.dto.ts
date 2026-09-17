@@ -1,8 +1,8 @@
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Matches, Min } from 'class-validator';
 
-//Tham số lọc báo cáo giá vốn theo tháng. Tất cả đều tuỳ chọn.
-export class GetCogsMonthlyQueryDTO {
+//Tham số lọc báo cáo giá mua bình quân theo tháng. Tất cả đều tuỳ chọn.
+export class GetPurchaseCostMonthlyQueryDTO {
   //Chỉ lấy một tháng, dạng YYYY-MM. Bỏ trống thì lấy mọi tháng có phát sinh.
   @IsOptional()
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, {
@@ -10,7 +10,7 @@ export class GetCogsMonthlyQueryDTO {
   })
   month?: string;
 
-  //Lọc đúng một sản phẩm, dùng khi cần xem diễn biến giá vốn của nó qua
+  //Lọc đúng một sản phẩm, dùng khi cần xem diễn biến giá mua của nó qua
   //các tháng. Ưu tiên cao hơn search: có productId thì bỏ qua search.
   @IsOptional()
   @Type(() => Number)
@@ -23,6 +23,7 @@ export class GetCogsMonthlyQueryDTO {
   @IsString()
   search?: string;
 
+  //Lọc theo kho nhập hàng về
   @IsOptional()
   @Type(() => Number)
   @IsInt()
